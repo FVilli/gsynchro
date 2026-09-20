@@ -1,0 +1,14 @@
+# Cartella Google Drive montata localmente tramite rclone.
+# Deve puntare direttamente alla cartella dedicata a questo repository.
+destination: /home/federico/GDrive/develop/AEP
+
+# Secondi di inattività prima della riconciliazione.
+debounce: 5
+
+# File e glob relativi alla root del monorepo.
+items:
+  - "*.md"
+  - docs/**/*.md
+  - stack/**/*.md
+  - tasks/**/*.md
+  - usecases/**/*.md
