@@ -1,6 +1,6 @@
 {
   "name": "gsynchro",
-  "version": "0.1.4",
+  "version": "0.1.7",
   "description": "Bidirectional sync of selected project files with a locally mounted folder",
   "license": "MIT",
   "type": "module",

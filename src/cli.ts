@@ -18,6 +18,7 @@ import {
 } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
+import { createInterface, type Interface } from 'node:readline/promises';
 
 type Side = 'repo' | 'drive';
 
@@ -25,6 +26,7 @@ interface Config {
   destination: string;
   debounce?: number;
   items: string[];
+  extensions: string[];
 }
 
 interface FileSnapshot {
@@ -73,12 +75,24 @@ type SyncOperation =
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 const DEBUG = process.argv.slice(2).includes('--debug');
+const SETUP = process.argv.slice(2).includes('--setup');
+const DEFAULT_ITEMS = ['*.md', 'docs/**/*.md'];
+const PREVIEW_SAMPLE_SIZE = 15;
+const PREVIEW_WARN_FILE_COUNT = 20;
+const PREVIEW_WARN_TOTAL_BYTES = 2 * 1024 * 1024;
 
-const ALLOWED_EXTENSIONS = new Set([
+const DEFAULT_EXTENSIONS = [
   '.md',
   '.txt',
   '.json',
-]);
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.svg',
+  '.pdf',
+];
+
+const EXTENSION_PATTERN = /^\.[a-z0-9]+$/;
 
 const EXCLUDED_DIRECTORIES = new Set([
   '.git',
@@ -145,7 +159,20 @@ function isPathInside(parent: string, child: string): boolean {
   );
 }
 
-function isAllowedRelativePath(relativePath: string): boolean {
+function normalizeExtension(rawExtension: string): string {
+  const trimmed = rawExtension.trim().toLowerCase();
+
+  return trimmed.startsWith('.') ? trimmed : `.${trimmed}`;
+}
+
+function isValidExtension(extension: string): boolean {
+  return EXTENSION_PATTERN.test(extension);
+}
+
+function isAllowedRelativePath(
+  relativePath: string,
+  extensions: ReadonlySet<string>,
+): boolean {
   const normalized = normalizeRelative(relativePath);
 
   if (!normalized) {
@@ -166,7 +193,7 @@ function isAllowedRelativePath(relativePath: string): boolean {
     .extname(normalized)
     .toLowerCase();
 
-  return ALLOWED_EXTENSIONS.has(extension);
+  return extensions.has(extension);
 }
 
 function snapshotsEqual(
@@ -199,6 +226,15 @@ function hashEqual(
   return snapshot.hash === hash;
 }
 
+async function pathExists(target: string): Promise<boolean> {
+  try {
+    await access(target);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function shortHash(hash: string): string {
   return hash.replace(/^sha256:/, '').slice(0, 10);
 }
@@ -216,6 +252,18 @@ function formatTimestamp(date = new Date()): string {
     pad(date.getMinutes()),
     pad(date.getSeconds()),
   ].join('');
+}
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KiB`;
+  }
+
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MiB`;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -259,10 +307,41 @@ async function loadConfig(): Promise<Config> {
     );
   }
 
+  if (
+    parsed.extensions !== undefined &&
+    (
+      !Array.isArray(parsed.extensions) ||
+      parsed.extensions.length === 0 ||
+      parsed.extensions.some(
+        (item) => typeof item !== 'string' || !item.trim(),
+      )
+    )
+  ) {
+    throw new Error(
+      'gsynchro.yml: "extensions" must be a non-empty string array',
+    );
+  }
+
+  const extensions = (
+    parsed.extensions ?? DEFAULT_EXTENSIONS
+  ).map(normalizeExtension);
+
+  const invalidExtension = extensions.find(
+    (extension) => !isValidExtension(extension),
+  );
+
+  if (invalidExtension) {
+    throw new Error(
+      `gsynchro.yml: invalid "extensions" entry "${invalidExtension}" ` +
+      '(expected a dot followed by letters/digits, e.g. ".md")',
+    );
+  }
+
   return {
     destination: path.resolve(parsed.destination),
     debounce: parsed.debounce ?? 3,
     items: parsed.items.map(normalizeRelative),
+    extensions,
   };
 }
 
@@ -305,6 +384,373 @@ async function validateRoots(): Promise<void> {
     throw new Error(
       `Destination is not a directory: ${DRIVE_ROOT}`,
     );
+  }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Setup wizard                                                               */
+/* -------------------------------------------------------------------------- */
+
+type DestinationCheck =
+  | { ok: true; resolved: string }
+  | { ok: false; error: string };
+
+async function validateDestinationCandidate(
+  rawValue: string,
+): Promise<DestinationCheck> {
+  const trimmed = rawValue.trim();
+
+  if (!trimmed) {
+    return { ok: false, error: 'Destination path cannot be empty.' };
+  }
+
+  const resolved = path.resolve(trimmed);
+
+  if (resolved === REPO_ROOT) {
+    return {
+      ok: false,
+      error: 'Destination cannot be the repository root.',
+    };
+  }
+
+  if (
+    isPathInside(REPO_ROOT, resolved) ||
+    isPathInside(resolved, REPO_ROOT)
+  ) {
+    return {
+      ok: false,
+      error: 'Repository and destination cannot contain each other.',
+    };
+  }
+
+  try {
+    const info = await stat(resolved);
+
+    if (!info.isDirectory()) {
+      return { ok: false, error: `Not a directory: ${resolved}` };
+    }
+  } catch {
+    return {
+      ok: false,
+      error:
+        `Directory does not exist or is not accessible: ${resolved}\n` +
+        '  gsynchro does not create the destination automatically — ' +
+        'create or mount it first.',
+    };
+  }
+
+  return { ok: true, resolved };
+}
+
+async function promptYesNo(
+  rl: Interface,
+  question: string,
+  defaultYes: boolean,
+): Promise<boolean> {
+  const suffix = defaultYes ? 'Y/n' : 'y/N';
+  const answer = (
+    await rl.question(`${question} [${suffix}] `)
+  ).trim().toLowerCase();
+
+  if (!answer) {
+    return defaultYes;
+  }
+
+  return answer === 'y' || answer === 'yes';
+}
+
+function sumSize(files: CandidateFile[]): number {
+  return files.reduce((total, file) => total + file.size, 0);
+}
+
+function printPreviewSample(files: CandidateFile[]): void {
+  const sample = files.slice(0, PREVIEW_SAMPLE_SIZE);
+
+  for (const file of sample) {
+    console.log(`    ${file.relativePath} (${formatSize(file.size)})`);
+  }
+
+  if (files.length > sample.length) {
+    console.log(`    ... and ${files.length - sample.length} more`);
+  }
+}
+
+/**
+ * Scans both roots with the candidate glob patterns using the exact same
+ * matching rules as the live sync engine, and reports what a first sync
+ * would bring into the repository, before anything is written or copied.
+ *
+ * Returns whether the user wants to proceed with these patterns.
+ */
+async function previewSelection(
+  destination: string,
+  items: string[],
+  extensions: string[],
+  rl: Interface,
+): Promise<boolean> {
+  console.log('\n  Scanning matched files (preview only, nothing is copied)...');
+
+  const extensionSet = new Set(extensions);
+
+  const [repoResult, driveResult] = await Promise.all([
+    collectCandidates(REPO_ROOT, items, extensionSet),
+    collectCandidates(destination, items, extensionSet),
+  ]);
+
+  const repoFiles = repoResult.files;
+  const driveFiles = driveResult.files;
+
+  const repoPaths = new Set(
+    repoFiles.map((file) => file.relativePath),
+  );
+  const driveOnly = driveFiles.filter(
+    (file) => !repoPaths.has(file.relativePath),
+  );
+  const driveOnlySize = sumSize(driveOnly);
+
+  console.log(
+    `  repository:  ${repoFiles.length} file(s) matched (${formatSize(sumSize(repoFiles))})`,
+  );
+  console.log(
+    `  destination: ${driveFiles.length} file(s) matched (${formatSize(sumSize(driveFiles))})`,
+  );
+
+  if (
+    repoResult.oversized.length > 0 ||
+    driveResult.oversized.length > 0
+  ) {
+    console.log(
+      `  (${repoResult.oversized.length + driveResult.oversized.length} matching file(s) skipped: larger than 10 MiB)`,
+    );
+  }
+
+  if (driveOnly.length === 0) {
+    console.log(
+      '  Nothing new on the destination side — a first sync would not add files to the repository.',
+    );
+
+    return promptYesNo(rl, '\nUse these patterns?', true);
+  }
+
+  console.log(
+    `\n  ${driveOnly.length} file(s) exist only on the destination, not in the repository ` +
+    `(${formatSize(driveOnlySize)}). Unless they are already tracked in gsynchro's sync status, ` +
+    'a first sync would copy them into the repository:',
+  );
+
+  printPreviewSample(driveOnly);
+
+  const looksLikeALot =
+    driveOnly.length > PREVIEW_WARN_FILE_COUNT ||
+    driveOnlySize > PREVIEW_WARN_TOTAL_BYTES;
+
+  if (looksLikeALot) {
+    console.log(
+      '\n  That looks like a lot to bring into the repository — double-check the destination and patterns.',
+    );
+  }
+
+  return promptYesNo(rl, '\nUse these patterns?', !looksLikeALot);
+}
+
+function yamlString(value: string): string {
+  return JSON.stringify(value);
+}
+
+function renderConfigYaml(cfg: {
+  destination: string;
+  items: string[];
+  extensions: string[];
+  debounce: number;
+}): string {
+  const itemsYaml = cfg.items
+    .map((item) => `  - ${yamlString(item)}`)
+    .join('\n');
+
+  const extensionsYaml = cfg.extensions
+    .map((extension) => `  - ${yamlString(extension)}`)
+    .join('\n');
+
+  return (
+    '# Existing local directory or mount point for the other side of the sync.\n' +
+    `destination: ${yamlString(cfg.destination)}\n` +
+    '\n' +
+    '# Seconds of inactivity before reconciling filesystem changes.\n' +
+    `debounce: ${cfg.debounce}\n` +
+    '\n' +
+    '# File extensions eligible for synchronization (case-insensitive).\n' +
+    'extensions:\n' +
+    `${extensionsYaml}\n` +
+    '\n' +
+    '# Glob patterns relative to the project root. Combine with "extensions"\n' +
+    '# above, e.g. "docs/**/*.*" to pick up every eligible extension under docs/.\n' +
+    'items:\n' +
+    `${itemsYaml}\n`
+  );
+}
+
+/**
+ * Interactively creates or overwrites `.gsynchro/gsynchro.yml`.
+ *
+ * Returns whether the caller should continue on into the normal watch
+ * flow (true), or stop here so the user can review the file first (false).
+ */
+async function runSetup(): Promise<boolean> {
+  const configAlreadyExists = await pathExists(CONFIG_PATH);
+
+  let existing: Config | undefined;
+
+  if (configAlreadyExists) {
+    try {
+      existing = await loadConfig();
+    } catch {
+      existing = undefined;
+    }
+  }
+
+  console.log('[gsynchro] setup');
+  console.log(`  repo: ${REPO_ROOT}`);
+
+  if (configAlreadyExists) {
+    console.log(
+      `  Existing configuration found at ${CONFIG_PATH}; current values are offered as defaults.`,
+    );
+  } else {
+    console.log(
+      `  No configuration found at ${CONFIG_PATH}; let's create one.`,
+    );
+  }
+
+  console.log('');
+
+  const rl = createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  try {
+    let destination: string | undefined;
+
+    while (destination === undefined) {
+      const defaultDestination = existing?.destination ?? '';
+      const answer = await rl.question(
+        `Destination directory${defaultDestination ? ` [${defaultDestination}]` : ''}: `,
+      );
+      const candidate = answer.trim() || defaultDestination;
+      const result = await validateDestinationCandidate(candidate);
+
+      if (result.ok) {
+        destination = result.resolved;
+      } else {
+        console.log(`  ${result.error}`);
+      }
+    }
+
+    let extensions: string[] | undefined;
+
+    while (extensions === undefined) {
+      const defaultExtensions =
+        existing?.extensions.join(', ') ?? DEFAULT_EXTENSIONS.join(', ');
+      const answer = await rl.question(
+        `File extensions to sync, comma-separated [${defaultExtensions}]: `,
+      );
+      const raw = answer.trim() || defaultExtensions;
+      const parsed = raw
+        .split(',')
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0)
+        .map(normalizeExtension);
+
+      if (parsed.length === 0) {
+        console.log('  At least one file extension is required.');
+        continue;
+      }
+
+      const invalid = parsed.find(
+        (extension) => !isValidExtension(extension),
+      );
+
+      if (invalid) {
+        console.log(
+          `  Invalid extension "${invalid}" — expected a dot followed by letters/digits, e.g. ".md".`,
+        );
+        continue;
+      }
+
+      extensions = [...new Set(parsed)];
+    }
+
+    let items: string[] | undefined;
+
+    while (items === undefined) {
+      const defaultItems =
+        existing?.items.join(', ') ?? DEFAULT_ITEMS.join(', ');
+      const answer = await rl.question(
+        `Glob patterns to sync, comma-separated [${defaultItems}]: `,
+      );
+      const raw = answer.trim() || defaultItems;
+      const parsed = raw
+        .split(',')
+        .map((item) => item.trim())
+        .filter((item) => item.length > 0);
+
+      if (parsed.length === 0) {
+        console.log('  At least one glob pattern is required.');
+        continue;
+      }
+
+      if (await previewSelection(destination, parsed, extensions, rl)) {
+        items = parsed;
+      }
+    }
+
+    let debounce: number | undefined;
+
+    while (debounce === undefined) {
+      const defaultDebounce = existing?.debounce ?? 3;
+      const answer = await rl.question(
+        `Debounce seconds [${defaultDebounce}]: `,
+      );
+      const raw = answer.trim() || String(defaultDebounce);
+      const parsed = Number(raw);
+
+      if (Number.isFinite(parsed) && parsed >= 0) {
+        debounce = parsed;
+      } else {
+        console.log('  Enter a number >= 0.');
+      }
+    }
+
+    console.log('\nConfiguration to write:');
+    console.log(`  destination: ${destination}`);
+    console.log(`  extensions:  ${extensions.join(', ')}`);
+    console.log(`  items:       ${items.join(', ')}`);
+    console.log(`  debounce:    ${debounce}s`);
+    console.log('');
+
+    const confirmed = await promptYesNo(
+      rl,
+      `Write ${path.relative(REPO_ROOT, CONFIG_PATH)}?`,
+      true,
+    );
+
+    if (!confirmed) {
+      console.log('[gsynchro] setup cancelled, nothing was written');
+      return false;
+    }
+
+    await mkdir(CONFIG_DIR, { recursive: true });
+    await writeFile(
+      CONFIG_PATH,
+      renderConfigYaml({ destination, items, extensions, debounce }),
+      'utf8',
+    );
+
+    console.log(`[gsynchro] wrote ${CONFIG_PATH}`);
+
+    return await promptYesNo(rl, 'Start gsynchro now?', true);
+  } finally {
+    rl.close();
   }
 }
 
@@ -384,16 +830,32 @@ async function hashFile(
 /* Scanning                                                                   */
 /* -------------------------------------------------------------------------- */
 
-async function scanSide(
-  side: Side,
-): Promise<Map<string, FileSnapshot>> {
-  const root = sideRoot(side);
+interface CandidateFile {
+  relativePath: string;
+  absolutePath: string;
+  size: number;
+  mtimeMs: number;
+}
 
+interface CollectResult {
+  files: CandidateFile[];
+  oversized: Array<{ relativePath: string; size: number }>;
+}
+
+/*
+ * Shared by the live scanner and the setup wizard's preview, so both
+ * apply exactly the same matching and safety rules.
+ */
+async function collectCandidates(
+  root: string,
+  items: string[],
+  extensions: ReadonlySet<string>,
+): Promise<CollectResult> {
   /*
    * fast-glob does the configured path filtering.
    * The fixed safety rules below are applied independently.
    */
-  const candidates = await fg(config.items, {
+  const candidates = await fg(items, {
     cwd: root,
     onlyFiles: true,
     unique: true,
@@ -408,12 +870,13 @@ async function scanSide(
     ],
   });
 
-  const result = new Map<string, FileSnapshot>();
+  const files: CandidateFile[] = [];
+  const oversized: Array<{ relativePath: string; size: number }> = [];
 
   for (const candidate of candidates) {
     const relativePath = normalizeRelative(candidate);
 
-    if (!isAllowedRelativePath(relativePath)) {
+    if (!isAllowedRelativePath(relativePath, extensions)) {
       continue;
     }
 
@@ -449,17 +912,45 @@ async function scanSide(
      * They are therefore not interpreted as deletions.
      */
     if (info.size > MAX_FILE_SIZE) {
-      console.warn(
-        `SKIP  ${side.toUpperCase()} ${relativePath} ` +
-        `(${(info.size / 1024 / 1024).toFixed(2)} MiB > 10 MiB)`,
-      );
+      oversized.push({ relativePath, size: info.size });
       continue;
     }
 
-    result.set(relativePath, {
-      hash: await hashFile(absolutePath),
+    files.push({
+      relativePath,
+      absolutePath,
       size: info.size,
       mtimeMs: info.mtimeMs,
+    });
+  }
+
+  return { files, oversized };
+}
+
+async function scanSide(
+  side: Side,
+): Promise<Map<string, FileSnapshot>> {
+  const root = sideRoot(side);
+  const { files, oversized } = await collectCandidates(
+    root,
+    config.items,
+    new Set(config.extensions),
+  );
+
+  for (const item of oversized) {
+    console.warn(
+      `SKIP  ${side.toUpperCase()} ${item.relativePath} ` +
+      `(${(item.size / 1024 / 1024).toFixed(2)} MiB > 10 MiB)`,
+    );
+  }
+
+  const result = new Map<string, FileSnapshot>();
+
+  for (const file of files) {
+    result.set(file.relativePath, {
+      hash: await hashFile(file.absolutePath),
+      size: file.size,
+      mtimeMs: file.mtimeMs,
     });
   }
 
@@ -1050,12 +1541,14 @@ function createWatcher(
   side: Side,
 ): FSWatcher {
   const root = sideRoot(side);
+  const extensionSet = new Set(config.extensions);
   debug(`WATCH ${side.toUpperCase()} starting`, {
     root,
     usePolling: side === 'drive',
     interval: 1000,
     ignoreInitial: true,
     items: config.items,
+    extensions: config.extensions,
   });
 
   const watcher = chokidar.watch(
@@ -1084,7 +1577,7 @@ function createWatcher(
         const relativePath = path.relative(root, path.resolve(root, filePath));
         const ignored = normalizeRelative(relativePath).split('/').some(
           (segment) => EXCLUDED_DIRECTORIES.has(segment),
-        ) || (info?.isFile() === true && !isAllowedRelativePath(relativePath));
+        ) || (info?.isFile() === true && !isAllowedRelativePath(relativePath, extensionSet));
         if (ignored) {
           debug(`FILTER ${side.toUpperCase()} ignored: ${relativePath}`);
         }
@@ -1164,6 +1657,14 @@ async function shutdown(
 /* -------------------------------------------------------------------------- */
 
 async function main(): Promise<void> {
+  if (SETUP || !(await pathExists(CONFIG_PATH))) {
+    const shouldContinue = await runSetup();
+
+    if (!shouldContinue) {
+      return;
+    }
+  }
+
   config = await loadConfig();
 
   DRIVE_ROOT = path.resolve(
@@ -1182,7 +1683,7 @@ async function main(): Promise<void> {
   console.log(`  drive:       ${DRIVE_ROOT}`);
   console.log(`  debounce:    ${config.debounce}s`);
   console.log(`  max size:    10 MiB`);
-  console.log(`  extensions:  .md .txt .json`);
+  console.log(`  extensions:  ${config.extensions.join(' ')}`);
   console.log(`  conflicts:   repository wins`);
   debug('Debug enabled; RAW events precede normalized EVENT and QUEUE logs');
 

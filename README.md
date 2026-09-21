@@ -8,6 +8,8 @@
 
 The “G” in **gSynchro** has a useful double reading: **Google Drive** is the shared transport, while **governance** is the project context being synchronized.
 
+`gsynchro` was designed with Google Drive specifically in mind, because a Drive folder is a natural, familiar place to keep the governance documents behind a ChatGPT Project (or a similar chatbot workspace) — the same folder a design conversation already reads from. In practice, though, `gsynchro` never talks to Google Drive itself: it only synchronizes the repository with an ordinary local directory (`destination` in the configuration). The Drive connection is made entirely outside `gsynchro`, by a separate client — Google Drive for desktop, an rclone mount, or any other tool that keeps a local directory mirrored with a remote one. Anything that can expose a folder locally works the same way: another cloud drive, a network share, a second repository, or a plain local folder with no cloud involved at all.
+
 ## Project governance and focused context
 
 A software project contains three broad kinds of files:
@@ -24,7 +26,7 @@ The preferred workflow keeps high-level product and architecture discussions out
 
 Once a design decision is ready to implement, turn it into an explicit task file. `gsynchro` can synchronize that task and the selected governance documents into the local repository. The coding agent then reads the task and governance, opens the code and relevant configuration, and implements the approved change. This separates **deciding what to build and why** from **deciding how to change the code**.
 
-In this model, `gsynchro` moves the governed project context and task handoffs between Drive and the repository. It does not synchronize source code. Its current safety filter allows `.md`, `.txt`, and `.json`; use `items` to select the documentation and task files that should travel. YAML files, Dockerfiles, and other configuration formats are not eligible under the fixed filter.
+In this model, `gsynchro` moves the governed project context and task handoffs between Drive and the repository. It does not synchronize source code. By default it allows `.md`, `.txt`, `.json`, `.png`, `.jpg`, `.jpeg`, `.svg`, and `.pdf` — documentation, task files, and the mockups or diagrams referenced from them; the `extensions` setting can narrow or extend that list per project, and `items` selects which paths of those eligible files should travel.
 
 ## Agentic development scenarios
 
@@ -198,7 +200,7 @@ The chatbot produces the task content; saving it as a `.md` file in the Drive in
 - Propagates deletions using a saved synchronization state.
 - Resolves simultaneous changes in favor of the project directory.
 - Moves propagated deletions to a local `.trash/` directory where possible.
-- Restricts synchronization to `.md`, `.txt`, and `.json` files up to 10 MiB.
+- Restricts synchronization to configurable file extensions (default: `.md`, `.txt`, `.json`, `.png`, `.jpg`, `.jpeg`, `.svg`, `.pdf`) up to 10 MiB.
 - Supports glob patterns relative to the project root.
 
 ## Requirements
@@ -215,7 +217,25 @@ Install `gsynchro` as a development dependency in the project you want to synchr
 npm install --save-dev gsynchro
 ```
 
-Add a script to your project's `package.json`:
+No further changes to `package.json` are required. `npm install` puts the `gsynchro` binary in the project's local `node_modules/.bin`, and `npx` resolves it there automatically, so it can be run straight from the project root:
+
+```bash
+npx gsynchro
+```
+
+If `.gsynchro/gsynchro.yml` does not exist yet, this runs an interactive setup wizard first: it asks for the destination directory, the file extensions to sync, the glob patterns to sync, and the debounce delay, then writes the configuration file. Before accepting the glob patterns, the wizard scans both the repository and the destination with those exact patterns and extensions, and shows how many files match on each side. Files found only on the destination are what a first sync would copy into the repository, so the wizard lists a sample of them and, past 20 files or 2 MiB, defaults the confirmation to "no" so a mistyped destination does not flood the repository with unrelated files. You can review or re-run the wizard any time with `--setup`:
+
+```bash
+npx gsynchro --setup
+```
+
+`--setup` re-asks every question, pre-filled with the current configuration as defaults, and asks for confirmation before overwriting `.gsynchro/gsynchro.yml`. At the end of either flow it asks whether to start watching immediately; answering no leaves the file in place so you can review it before the first run — see the safety note below.
+
+Once started, the process stays active while it watches both directories. Stop it with `Ctrl+C` or a termination signal.
+
+### Optional: a package.json script
+
+`npm install` cannot add scripts to `package.json` on its own — `gsynchro` does not attempt this either, since a package silently rewriting a project's own `package.json` on install is more surprising than helpful. If you would rather type `npm run gsynchro` than `npx gsynchro`, add the script yourself:
 
 ```json
 {
@@ -225,17 +245,14 @@ Add a script to your project's `package.json`:
 }
 ```
 
-Create the configuration file described below, then run the watcher from the project root:
-
 ```bash
 npm run gsynchro
+npm run gsynchro -- --setup
 ```
-
-The process stays active while it watches both directories. Stop it with `Ctrl+C` or a termination signal.
 
 ## Configuration
 
-Create `.gsynchro/gsynchro.yml` in the project root:
+The setup wizard (above) creates `.gsynchro/gsynchro.yml` for you. To write or edit it by hand instead, create it in the project root:
 
 ```yaml
 # Existing local directory or mount point for the other side of the sync.
@@ -244,10 +261,21 @@ destination: /home/alex/Drive/projects/my-project
 # Seconds of inactivity before reconciling filesystem changes.
 debounce: 5
 
+# File extensions eligible for synchronization (case-insensitive).
+extensions:
+  - ".md"
+  - ".txt"
+  - ".json"
+  - ".png"
+  - ".jpg"
+  - ".jpeg"
+  - ".svg"
+  - ".pdf"
+
 # Glob patterns relative to the project root.
 items:
   - "*.md"
-  - "docs/**/*.md"
+  - "docs/**/*.*"
   - "handbook/**/*.md"
   - "metadata/**/*.json"
 ```
@@ -258,9 +286,10 @@ items:
 | --- | --- | --- |
 | `destination` | Yes | Path to the existing destination directory. Relative paths are resolved from the process working directory; an absolute path is recommended. |
 | `items` | Yes | A non-empty list of glob patterns, relative to the project root, that selects files for synchronization. |
+| `extensions` | No | A non-empty list of file extensions eligible for synchronization, each written with its leading dot (`.md`, not `md`); matching is case-insensitive. Defaults to `.md`, `.txt`, `.json`, `.png`, `.jpg`, `.jpeg`, `.svg`, `.pdf`. Narrow it (e.g. to just `.md`) or extend it (e.g. add `.docx`, `.csv`) to fit what the project's governance actually needs. |
 | `debounce` | No | Quiet period in seconds before a reconciliation. Defaults to `3`; `0` runs without an additional delay. |
 
-Patterns are evaluated against both roots. For example, `docs/**/*.md` selects Markdown files below `docs/` on both sides. Files still need to pass the fixed safety rules described below.
+Patterns in `items` are evaluated against both roots, and a file must also have one of the extensions in `extensions` to be eligible. This split is deliberate: once `extensions` says what kinds of files are in scope, `items` can use broader patterns like `docs/**/*.*` instead of repeating the extension in every pattern. For example, `docs/**/*.md` selects Markdown files below `docs/` on both sides, while `docs/**/*.*` selects every file below `docs/` whose extension is currently listed in `extensions`. Files still need to pass the fixed safety rules described below.
 
 ### Platform setup examples
 
@@ -296,7 +325,7 @@ Start the watcher from the project root in PowerShell:
 
 ```powershell
 Set-Location C:\work\my-project
-npm run gsynchro
+npx gsynchro
 ```
 
 Keep Drive for desktop running and signed in. Wait for it to finish uploading local changes before shutting down or disconnecting the computer.
@@ -328,7 +357,7 @@ Start `gsynchro` from the project root in another terminal:
 
 ```bash
 cd ~/work/my-project
-npm run gsynchro
+npx gsynchro
 ```
 
 The required FUSE support and permissions depend on the Linux distribution and mount configuration. Consult the [rclone mount documentation](https://rclone.org/commands/rclone_mount/) if the mount command fails.
@@ -348,10 +377,16 @@ Set `destination` to the actual path you selected. For example:
 ```yaml
 destination: '/Users/alex/Google Drive/projects/my-project'
 debounce: 5
+extensions:
+  - ".md"
+  - ".png"
+  - ".jpg"
 items:
   - "*.md"
-  - "docs/**/*.md"
+  - "docs/**/*.*"
 ```
+
+This variant also syncs mockups and screenshots referenced from the docs (`.png`, `.jpg`): `extensions` narrows the file types actually eligible, and `docs/**/*.*` then picks up anything under `docs/` matching one of them, instead of listing each extension as a separate `items` pattern.
 
 If you prefer **Stream files**, first locate Google Drive in Finder under **Locations** and use the path shown there. On macOS 12.1 and later, streaming uses Apple's File Provider; Google documents `~/Library/CloudStorage` as the default location, and macOS may control the folder location. On the legacy streaming method, the default is `/Volumes/GoogleDrive`. These paths can vary with macOS version and Drive settings, so inspect the actual location rather than copying either default blindly. Make the project folder available offline before running `gsynchro`; streaming files may otherwise need to be downloaded when read.
 
@@ -361,7 +396,7 @@ Start the watcher from the project root in Terminal:
 
 ```bash
 cd ~/work/my-project
-npm run gsynchro
+npx gsynchro
 ```
 
 Keep Drive for desktop running and signed in, and wait for local changes to finish syncing before shutting down. See Google's guides to [streaming and mirroring](https://support.google.com/drive/answer/13401938?hl=en) and [customizing Drive locations](https://support.google.com/drive/answer/13470231?hl=en) for current settings.
@@ -371,13 +406,13 @@ Keep Drive for desktop running and signed in, and wait for local changes to fini
 Start the watcher from the project root:
 
 ```bash
-npm run gsynchro
+npx gsynchro
 ```
 
 Enable detailed watcher and reconciliation logs with:
 
 ```bash
-npm run gsynchro -- --debug
+npx gsynchro --debug
 ```
 
 Debug output includes timestamps and filesystem events, filter decisions, debounce activity, and the reconciliation plan. The watcher uses polling for the destination directory to improve change detection on mounted filesystems. Remote changes become visible according to the mount client's cache behavior; `gsynchro` cannot detect a remote change before the mounted filesystem reports it.
@@ -418,9 +453,9 @@ When a deletion is propagated, `gsynchro` attempts to move the affected file int
 
 ## Safety rules
 
-The following rules are always applied, regardless of the configured patterns:
+The following rules are always applied, regardless of the configured `items` patterns:
 
-- Only `.md`, `.txt`, and `.json` files are eligible; extension matching is case-insensitive.
+- Only files whose extension is listed in `extensions` are eligible (default: `.md`, `.txt`, `.json`, `.png`, `.jpg`, `.jpeg`, `.svg`, `.pdf`); matching is case-insensitive. Unlike the other rules below, this one is configurable — see [Configuration fields](#configuration-fields).
 - Files larger than 10 MiB are skipped.
 - `.git/`, `node_modules/`, `.gsynchro/`, and `.trash/` directories are excluded.
 - Symbolic links are not followed or synchronized.
@@ -449,7 +484,7 @@ Start or repair the filesystem mount and confirm that the configured directory e
 
 ### A file is not synchronized
 
-Check that its path matches an `items` pattern, its extension is `.md`, `.txt`, or `.json`, it is no larger than 10 MiB, and it is not inside an excluded directory. Run with `--debug` to inspect watcher and filter output.
+Check that its path matches an `items` pattern, its extension is listed in the configured `extensions` (default: `.md`, `.txt`, `.json`, `.png`, `.jpg`, `.jpeg`, `.svg`, `.pdf`), it is no larger than 10 MiB, and it is not inside an excluded directory. Run with `--debug` to inspect watcher and filter output.
 
 ### Remote changes appear late
 
