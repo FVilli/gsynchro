@@ -80,7 +80,63 @@ const STYLED_OUTPUT =
   Boolean(process.stdout.isTTY) &&
   !process.env.NO_COLOR &&
   !process.argv.slice(2).includes('--no-color');
-const DEFAULT_ITEMS = ['*.md', 'docs/**/*.md'];
+const DEFAULT_ITEM_SOURCES = [
+  {
+    directory: null,
+    pattern: '*.*',
+    description: 'project root (not recursive)',
+  },
+  { directory: 'adr', pattern: 'adr/**/*.*', description: 'adr/ (recursive)' },
+  {
+    directory: 'decisions',
+    pattern: 'decisions/**/*.*',
+    description: 'decisions/ (recursive)',
+  },
+  { directory: 'docs', pattern: 'docs/**/*.*', description: 'docs/ (recursive)' },
+  {
+    directory: 'mockups',
+    pattern: 'mockups/**/*.*',
+    description: 'mockups/ (recursive)',
+  },
+  {
+    directory: 'prompts',
+    pattern: 'prompts/**/*.*',
+    description: 'prompts/ (recursive)',
+  },
+  { directory: 'tasks', pattern: 'tasks/**/*.*', description: 'tasks/ (recursive)' },
+  { directory: 'stack', pattern: 'stack/**/*.*', description: 'stack/ (recursive)' },
+  {
+    directory: 'documents',
+    pattern: 'documents/**/*.*',
+    description: 'documents/ (recursive)',
+  },
+  {
+    directory: 'documentation',
+    pattern: 'documentation/**/*.*',
+    description: 'documentation/ (recursive)',
+  },
+  {
+    directory: 'milestones',
+    pattern: 'milestones/**/*.*',
+    description: 'milestones/ (recursive)',
+  },
+  {
+    directory: 'governance',
+    pattern: 'governance/**/*.*',
+    description: 'governance/ (recursive)',
+  },
+  { directory: 'ai', pattern: 'ai/**/*.*', description: 'ai/ (recursive)' },
+  {
+    directory: 'agents',
+    pattern: 'agents/**/*.*',
+    description: 'agents/ (recursive)',
+  },
+  {
+    directory: 'architecture',
+    pattern: 'architecture/**/*.*',
+    description: 'architecture/ (recursive)',
+  },
+] as const;
 const PREVIEW_SAMPLE_SIZE = 15;
 const PREVIEW_WARN_FILE_COUNT = 20;
 const PREVIEW_WARN_TOTAL_BYTES = 2 * 1024 * 1024;
@@ -187,6 +243,57 @@ function normalizeRelative(filePath: string): string {
   return filePath
     .replaceAll('\\', '/')
     .replace(/^\.\/+/, '');
+}
+
+function folderOrPatternToItem(value: string): string {
+  const normalized = normalizeRelative(
+    value.trim().replace(/\/+$/, ''),
+  );
+
+  if (normalized === '.' || normalized.length === 0) {
+    return '*.*';
+  }
+
+  /*
+   * Keep explicit globs and filenames intact. A plain path is interpreted
+   * as a folder because the setup question is intentionally folder-first.
+   */
+  if (
+    /[*?[\]{}]/.test(normalized) ||
+    path.extname(normalized)
+  ) {
+    return normalized;
+  }
+
+  return `${normalized}/**/*.*`;
+}
+
+async function discoverDefaultItemSources(): Promise<
+  Array<(typeof DEFAULT_ITEM_SOURCES)[number]>
+> {
+  const discovered: Array<(typeof DEFAULT_ITEM_SOURCES)[number]> = [
+    DEFAULT_ITEM_SOURCES[0],
+  ];
+
+  for (const source of DEFAULT_ITEM_SOURCES.slice(1)) {
+    if (!source.directory) {
+      continue;
+    }
+
+    try {
+      const info = await lstat(
+        path.join(REPO_ROOT, source.directory),
+      );
+
+      if (info.isDirectory()) {
+        discovered.push(source);
+      }
+    } catch {
+      /* A missing or inaccessible candidate is simply not proposed. */
+    }
+  }
+
+  return discovered;
 }
 
 function sideRoot(side: Side): string {
@@ -690,6 +797,10 @@ async function runSetup(): Promise<boolean> {
 
   console.log('');
 
+  const discoveredDefaultItems = existing
+    ? []
+    : await discoverDefaultItemSources();
+
   const rl = createInterface({
     input: process.stdin,
     output: process.stdout,
@@ -716,24 +827,29 @@ async function runSetup(): Promise<boolean> {
     let extensions: string[] | undefined;
 
     while (extensions === undefined) {
-      const defaultExtensions =
-        existing?.extensions.join(', ') ?? DEFAULT_EXTENSIONS.join(', ');
-      const answer = await rl.question(
-        `File extensions to sync, comma-separated [${defaultExtensions}]: `,
+      const baseExtensions =
+        existing?.extensions ?? DEFAULT_EXTENSIONS;
+
+      console.log(
+        `\n  ${existing ? 'The current configuration' : 'gsynchro'} synchronizes these file extensions${
+          existing ? ':' : ' by default:'
+        }`,
       );
-      const raw = answer.trim() || defaultExtensions;
-      const parsed = raw
+      console.log(`  ${baseExtensions.join(', ')}`);
+      console.log(
+        '  You can remove any of them later in .gsynchro/gsynchro.yml.',
+      );
+
+      const answer = await rl.question(
+        '  Add other extensions, comma-separated (or press Enter to keep these): ',
+      );
+      const additions = answer
         .split(',')
         .map((item) => item.trim())
         .filter((item) => item.length > 0)
         .map(normalizeExtension);
 
-      if (parsed.length === 0) {
-        console.log('  At least one file extension is required.');
-        continue;
-      }
-
-      const invalid = parsed.find(
+      const invalid = additions.find(
         (extension) => !isValidExtension(extension),
       );
 
@@ -744,30 +860,51 @@ async function runSetup(): Promise<boolean> {
         continue;
       }
 
-      extensions = [...new Set(parsed)];
+      extensions = [...new Set([...baseExtensions, ...additions])];
     }
 
     let items: string[] | undefined;
 
     while (items === undefined) {
-      const defaultItems =
-        existing?.items.join(', ') ?? DEFAULT_ITEMS.join(', ');
-      const answer = await rl.question(
-        `Glob patterns to sync, comma-separated [${defaultItems}]: `,
+      const baseItems =
+        existing?.items ??
+        discoveredDefaultItems.map((source) => source.pattern);
+
+      console.log(
+        `\n  ${existing ? 'The current configuration synchronizes:' : 'gsynchro found these locations in this repository and will synchronize them by default:'}`,
       );
-      const raw = answer.trim() || defaultItems;
-      const parsed = raw
+
+      if (existing) {
+        for (const item of baseItems) {
+          console.log(`  • ${item}`);
+        }
+      } else {
+        for (const item of discoveredDefaultItems) {
+          console.log(`  • ${item.description}`);
+        }
+      }
+
+      console.log(
+        '  You can remove any of them later in .gsynchro/gsynchro.yml.',
+      );
+
+      const answer = await rl.question(
+        '  Add folders or glob patterns, comma-separated (or press Enter to keep these): ',
+      );
+      const additions = answer
         .split(',')
         .map((item) => item.trim())
         .filter((item) => item.length > 0);
 
-      if (parsed.length === 0) {
-        console.log('  At least one glob pattern is required.');
-        continue;
-      }
+      const selectedItems = [
+        ...new Set([
+          ...baseItems,
+          ...additions.map(folderOrPatternToItem),
+        ]),
+      ];
 
-      if (await previewSelection(destination, parsed, extensions, rl)) {
-        items = parsed;
+      if (await previewSelection(destination, selectedItems, extensions, rl)) {
+        items = selectedItems;
       }
     }
 

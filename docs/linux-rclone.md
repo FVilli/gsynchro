@@ -80,7 +80,31 @@ Save the remote when the configuration is complete.
 
 ---
 
-## 3. Verify the remote
+## 3. Your personal OAuth project and token expiry
+
+The Google Cloud project and OAuth client created in the previous step are **your personal credentials**. They are not supplied, owned, or operated by `gsynchro`; `rclone` uses them only to connect your local mount to your Google Drive account.
+
+For a personal setup, it is usually simplest to keep the OAuth consent screen in **Testing**. Google then treats the account you authorize as a test user. For an external app in Testing that requests Google Drive access, Google expires the test-user authorization and its refresh token after seven days. This is expected behaviour, not a `gsynchro` or rclone failure.
+
+If a mount that used to work starts reporting an expired or invalid token, reconnect the remote and complete the browser sign-in again with the same Google account:
+
+```bash
+rclone config reconnect gdrive:
+```
+
+You can then restart the mount, if necessary:
+
+```bash
+systemctl --user restart rclone-gdrive.service
+```
+
+Moving the OAuth consent screen to **Production** avoids the Testing-mode seven-day expiry. For a private, personal Drive integration this is generally more work than it is worth. Depending on the selected scopes and audience, Google may require app verification; that process can require a publicly reachable homepage on a domain you own and verify, a privacy policy, and other application details. Review Google's [app audience documentation](https://support.google.com/cloud/answer/13464321) and [OAuth verification requirements](https://support.google.com/cloud/answer/9110914) before choosing that route.
+
+`gsynchro` is planning a future managed OAuth application and supporting website to make this setup easier. Until that is available, each user should create and maintain their own personal Google Cloud project and reconnect it when the Testing token expires.
+
+---
+
+## 4. Verify the remote
 
 List directories:
 
@@ -108,7 +132,7 @@ rclone lsd gdrive:develop
 
 ---
 
-## 4. Create a local mount
+## 5. Create a local mount
 
 Create the mount point:
 
@@ -132,7 +156,7 @@ Google Drive files and directories should appear with their normal names. `--vfs
 
 ---
 
-## 5. Test writing
+## 6. Test writing
 
 For example:
 
@@ -155,7 +179,7 @@ Also verify the changes in the Google Drive web interface.
 
 ---
 
-## 6. Start the mount automatically with systemd
+## 7. Start the mount automatically with systemd
 
 Create this file:
 
@@ -254,7 +278,7 @@ systemctl --user start rclone-gdrive.service
 
 ---
 
-## 7. Unmount manually
+## 8. Unmount manually
 
 If the mount was started manually:
 
@@ -272,7 +296,7 @@ Do not run the manual mount and the systemd service at the same time for `~/GDri
 
 ---
 
-## 8. Configure gsynchro
+## 9. Configure gsynchro
 
 Example `.gsynchro/gsynchro.yml`:
 
@@ -297,7 +321,7 @@ npm run gsynchro
 
 ---
 
-## 9. GNOME Online Accounts
+## 10. GNOME Online Accounts
 
 If Google Drive is already configured through GNOME Online Accounts, do not use its **Files** integration as the `gsynchro` destination. It can be disabled to avoid a second, misleading view of the same Drive; rclone remains the mount used by `gsynchro`.
 
@@ -314,7 +338,7 @@ Other Google services can remain enabled.
 
 ---
 
-## 10. Useful rclone commands
+## 11. Useful rclone commands
 
 List directories:
 

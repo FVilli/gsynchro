@@ -237,13 +237,13 @@ No further changes to `package.json` are required. `npm install` puts the `gsync
 npx gsynchro
 ```
 
-If `.gsynchro/gsynchro.yml` does not exist yet, this runs an interactive setup wizard first: it asks for the destination directory, the file extensions to sync, the glob patterns to sync, and the debounce delay, then writes the configuration file. Before accepting the glob patterns, the wizard scans both the repository and the destination with those exact patterns and extensions, and shows how many files match on each side. Files found only on the destination are what a first sync would copy into the repository, so the wizard lists a sample of them and, past 20 files or 2 MiB, defaults the confirmation to "no" so a mistyped destination does not flood the repository with unrelated files. You can review or re-run the wizard any time with `--setup`:
+If `.gsynchro/gsynchro.yml` does not exist yet, this runs an interactive setup wizard first. It asks for the destination directory, then shows its default file extensions and discovers common document-oriented directories already present in the repository. It always includes eligible files in the project root (not recursively), and proposes only existing directories named `adr`, `decisions`, `docs`, `mockups`, `prompts`, `tasks`, `stack`, `documents`, `documentation`, `milestones`, `governance`, `ai`, `agents`, or `architecture`. You can add extensions, folders, or glob patterns without having to type the defaults; remove any unwanted defaults later in the configuration file. Before accepting the selection, the wizard scans both the repository and the destination with the exact resulting patterns and extensions, and shows how many files match on each side. Files found only on the destination are what a first sync would copy into the repository, so the wizard lists a sample of them and, past 20 files or 2 MiB, defaults the confirmation to "no" so a mistyped destination does not flood the repository with unrelated files. You can review or re-run the wizard any time with `--setup`:
 
 ```bash
 npx gsynchro --setup
 ```
 
-`--setup` re-asks every question, pre-filled with the current configuration as defaults, and asks for confirmation before overwriting `.gsynchro/gsynchro.yml`. At the end of either flow it asks whether to start watching immediately; answering no leaves the file in place so you can review it before the first run — see the safety note below.
+`--setup` keeps the current destination, extensions, and locations, and lets you add more before asking for confirmation to overwrite `.gsynchro/gsynchro.yml`. Edit the file directly to remove entries. At the end of either flow it asks whether to start watching immediately; answering no leaves the file in place so you can review it before the first run — see the safety note below.
 
 Once started, the process stays active while it watches both directories. Stop it with `Ctrl+C` or a termination signal.
 
@@ -288,10 +288,14 @@ extensions:
 
 # Glob patterns relative to the project root.
 items:
-  - "*.md"
+  - "*.*"
+  - "adr/**/*.*"
+  - "decisions/**/*.*"
   - "docs/**/*.*"
-  - "handbook/**/*.md"
-  - "metadata/**/*.json"
+  - "mockups/**/*.*"
+  - "prompts/**/*.*"
+  - "tasks/**/*.*"
+  - "stack/**/*.*"
 ```
 
 ### Configuration fields
@@ -299,7 +303,7 @@ items:
 | Field | Required | Description |
 | --- | --- | --- |
 | `destination` | Yes | Path to the existing destination directory. Relative paths are resolved from the process working directory; an absolute path is recommended. |
-| `items` | Yes | A non-empty list of glob patterns, relative to the project root, that selects files for synchronization. |
+| `items` | Yes | A non-empty list of glob patterns, relative to the project root, that selects files for synchronization. On first setup, the wizard selects eligible files in the project root (not recursively), then adds only existing directories from its common document-location list recursively. |
 | `extensions` | No | A non-empty list of file extensions eligible for synchronization, each written with its leading dot (`.md`, not `md`); matching is case-insensitive. Defaults to `.md`, `.txt`, `.json`, `.png`, `.jpg`, `.jpeg`, `.svg`, `.pdf`. Narrow it (e.g. to just `.md`) or extend it (e.g. add `.docx`, `.csv`) to fit what the project's governance actually needs. |
 | `debounce` | No | Quiet period in seconds before a reconciliation. Defaults to `3`; `0` runs without an additional delay. |
 
