@@ -106,6 +106,8 @@ my-project/
 ├── docs/
 │   ├── architecture.md
 │   └── decisions.md
+├── milestones/
+│   └── M-003-service-observability.md
 ├── tasks/
 │   ├── todo/
 │   ├── in-progress/
@@ -113,7 +115,7 @@ my-project/
 └── src/
 ```
 
-For example, select the project guidance and task files in `.gsynchro/gsynchro.yml`:
+For example, select the project guidance, milestones, and task files in `.gsynchro/gsynchro.yml`:
 
 ```yaml
 destination: /absolute/path/to/drive/my-project
@@ -122,59 +124,65 @@ items:
   - "README.md"
   - "AGENTS.md"
   - "docs/**/*.md"
+  - "milestones/**/*.md"
   - "tasks/**/*.md"
 ```
 
 `src/` is intentionally not selected: this tool is designed for a controlled set of documentation and task files, not for synchronizing the source tree. The local agent works directly in the repository source tree.
 
-### Task file example
+### Development milestone example
 
-First discuss and approve the intended change in your chatbot, then save or export the approved task as a Markdown file under the Drive folder's `tasks/todo/` directory. For example, create `tasks/todo/TASK-042-add-health-endpoint.md`:
+First discuss and approve a coherent development outcome in your chatbot, then save or export it as a Markdown milestone under the Drive folder's `milestones/` directory. A milestone gives people and agents durable context: it explains the outcome, scope, constraints, and evidence of completion before the work is split into individual tasks. For example, create `milestones/M-003-service-observability.md`:
 
 ```markdown
 ---
-id: TASK-042
-status: todo
-created: 2026-09-19
+id: M-003
+status: planned
+target: 0.3.0
+owner: platform
 ---
 
-# Add a health endpoint
+# Service observability baseline
 
-## Objective
+## Outcome
 
-Add `GET /health` to report whether the service is ready to accept requests.
+Operators can determine whether the service is live, ready to receive traffic, and failing requests without inspecting application logs manually.
 
-## Context
+## Scope
 
-Follow the service structure and conventions documented in `docs/architecture.md`.
+- Add liveness and readiness endpoints.
+- Publish request count, error count, and latency metrics.
+- Document local verification and the production dashboard or alert assumptions.
 
-## Acceptance criteria
+## Constraints
 
-- Return HTTP 200 and `{"status":"ok"}` when the service is ready.
-- Add or update the relevant automated checks.
-- Do not add a new runtime dependency.
-- Summarize the implementation and verification in this task file.
+- Follow the boundaries and conventions in `docs/architecture.md`.
+- Do not expose secrets, customer data, or internal implementation details through an endpoint or metric label.
+- Keep the initial implementation compatible with the current deployment environment.
+
+## Done when
+
+- Liveness and readiness behavior is documented and covered by automated checks.
+- The selected metrics are available in the supported monitoring path.
+- Alert thresholds and ownership are recorded in `docs/operations.md`.
+- The milestone is linked to its implementation tasks and their results.
 ```
 
-The intended handoff is:
+The milestone travels as shared project context:
 
 ```text
 ChatGPT Project
-  └─ design, architecture, approved task
-       ↓ save task Markdown in the linked Drive folder
+  └─ design, architecture, approved milestone
+       ↓ save milestone Markdown in the linked Drive folder
 Google Drive folder
        ↓ local client makes files available
 gsynchro
-       ↓ copies tasks/todo/TASK-042-*.md into the repository
-Local task runner
-       ↓ sees a stable todo file and claims it once
-Coding agent
-       ├─ reads repository guidance and task acceptance criteria
-       ├─ works in the local source tree
-       └─ writes a result and task status update
-gsynchro
-       └─ copies the updated task and selected documentation back to Drive
+       ↓ copies milestones/M-003-*.md into the repository
+People and coding agents
+       └─ use the milestone to create, prioritize, and complete smaller tasks
 ```
+
+A milestone is planning and governance context; it does not by itself start an agent run. Derive a focused file under `tasks/todo/` when work is ready to execute, then let a separate runner observe that task directory.
 
 ### Local runner responsibilities
 
@@ -266,7 +274,7 @@ npm run gsynchro -- --setup
 
 ## Configuration
 
-The setup wizard (above) creates `.gsynchro/gsynchro.yml` for you. To write or edit it by hand instead, create it in the project root:
+The setup wizard creates `.gsynchro/gsynchro.yml` for you. On a first setup, its `items` list always starts with eligible files in the project root and then includes only common documentation directories that actually exist in that repository. To write or edit the file by hand instead, create it in the project root. This example represents a project that has `docs/` and `tasks/`:
 
 ```yaml
 # Existing local directory or mount point for the other side of the sync.
@@ -286,16 +294,13 @@ extensions:
   - ".svg"
   - ".pdf"
 
-# Glob patterns relative to the project root.
+# Glob patterns relative to the project root. `*.*` means eligible files in
+# the project root only; `**` makes the selected directory recursive.
 items:
   - "*.*"
-  - "adr/**/*.*"
-  - "decisions/**/*.*"
   - "docs/**/*.*"
-  - "mockups/**/*.*"
-  - "prompts/**/*.*"
+  - "milestones/**/*.*"
   - "tasks/**/*.*"
-  - "stack/**/*.*"
 ```
 
 ### Configuration fields
@@ -303,7 +308,7 @@ items:
 | Field | Required | Description |
 | --- | --- | --- |
 | `destination` | Yes | Path to the existing destination directory. Relative paths are resolved from the process working directory; an absolute path is recommended. |
-| `items` | Yes | A non-empty list of glob patterns, relative to the project root, that selects files for synchronization. On first setup, the wizard selects eligible files in the project root (not recursively), then adds only existing directories from its common document-location list recursively. |
+| `items` | Yes | A non-empty list of glob patterns, relative to the project root, that selects files for synchronization. `*.*` selects eligible files in the project root only. On first setup, the wizard adds that pattern plus only existing directories named `adr`, `decisions`, `docs`, `mockups`, `prompts`, `tasks`, `stack`, `documents`, `documentation`, `milestones`, `governance`, `ai`, `agents`, or `architecture`, each recursively. |
 | `extensions` | No | A non-empty list of file extensions eligible for synchronization, each written with its leading dot (`.md`, not `md`); matching is case-insensitive. Defaults to `.md`, `.txt`, `.json`, `.png`, `.jpg`, `.jpeg`, `.svg`, `.pdf`. Narrow it (e.g. to just `.md`) or extend it (e.g. add `.docx`, `.csv`) to fit what the project's governance actually needs. |
 | `debounce` | No | Quiet period in seconds before a reconciliation. Defaults to `3`; `0` runs without an additional delay. |
 
@@ -333,8 +338,8 @@ Use that path in `.gsynchro/gsynchro.yml`. Forward slashes work in YAML on Windo
 destination: 'G:/My Drive/projects/my-project'
 debounce: 5
 items:
-  - "*.md"
-  - "docs/**/*.md"
+  - "*.*"
+  - "docs/**/*.*"
 ```
 
 If you use mirroring, set `destination` to the corresponding local folder selected in Drive for desktop preferences, for example `C:/Users/Alex/My Drive/projects/my-project`. The exact drive letter and folder layout depend on your Drive for desktop settings.
@@ -369,8 +374,8 @@ mkdir -p "$HOME/GDrive/projects/my-project"
 destination: /home/alex/GDrive/projects/my-project
 debounce: 5
 items:
-  - "*.md"
-  - "docs/**/*.md"
+  - "*.*"
+  - "docs/**/*.*"
 ```
 
 Start `gsynchro` from the project root in another terminal:
@@ -402,7 +407,7 @@ extensions:
   - ".png"
   - ".jpg"
 items:
-  - "*.md"
+  - "*.*"
   - "docs/**/*.*"
 ```
 
