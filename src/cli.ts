@@ -619,6 +619,21 @@ async function runSetup(): Promise<boolean> {
     console.log(
       `  No configuration found at ${CONFIG_PATH}; let's create one.`,
     );
+    console.log(
+      '  Enter the absolute path of an existing local folder for the other side of the sync.',
+    );
+    console.log(
+      '  It must be a folder provided by your Drive client or filesystem mount, not a Google Drive web URL.',
+    );
+    console.log(
+      '  On Windows and macOS, use Google Drive for desktop; on Linux, use an rclone mount.',
+    );
+    console.log(
+      '  Create a project-specific subfolder in that location before continuing.',
+    );
+    console.log(
+      '  Setup guide: https://github.com/FVilli/gsynchro#platform-setup-examples',
+    );
   }
 
   console.log('');

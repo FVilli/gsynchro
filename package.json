@@ -1,8 +1,26 @@
 {
   "name": "gsynchro",
-  "version": "0.1.7",
+  "version": "0.1.9",
   "description": "Bidirectional sync of selected project files with a locally mounted folder",
+  "keywords": [
+    "sync",
+    "synchronization",
+    "google-drive",
+    "rclone",
+    "cli",
+    "documentation",
+    "governance"
+  ],
   "license": "MIT",
+  "author": "Federico Villi",
+  "homepage": "https://github.com/FVilli/gsynchro#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/FVilli/gsynchro.git"
+  },
+  "bugs": {
+    "url": "https://github.com/FVilli/gsynchro/issues"
+  },
   "type": "module",
   "bin": {
     "gsynchro": "dist/cli.js"
@@ -19,7 +37,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "gsynchro": "tsx src/cli.ts"
+    "gsynchro": "tsx src/cli.ts",
+    "prepublishOnly": "npm run typecheck && npm run build"
   },
   "dependencies": {
     "chokidar": "^5.0.0",

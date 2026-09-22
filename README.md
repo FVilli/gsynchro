@@ -41,6 +41,20 @@ The workflow separates four roles:
 
 The Drive connection is a source for chatbot conversations; it is not an operating-system mount or a file-change trigger. If a chatbot connector is read-only or does not write Markdown files, save or export the approved task to Drive yourself. The local watcher, after the file has arrived in the repository, is what turns that handoff into an automatic agent run.
 
+### Other conversational AI and storage combinations
+
+The ChatGPT Project + Google Drive pattern is one useful combination, not a requirement. Comparable options include:
+
+- **Microsoft Copilot Notebooks + OneDrive/SharePoint** for Microsoft 365-centric teams.
+- **Perplexity Spaces + file connectors** for research-oriented, connected file search.
+- **Mistral Le Chat + Libraries or MCP connectors** for managed knowledge bases and custom integrations.
+- **Gemini Notebook + Google Drive** for read-only, automatically refreshed Drive sources.
+- **Claude Projects + connectors** for project knowledge and connected services.
+- **AnythingLLM** for local-first workspaces, document knowledge, and controlled agents.
+- **Open WebUI + oikb** for a self-hosted knowledge base backed by local folders, Git, cloud storage, or other supported sources.
+
+See [alternative scenarios and their trade-offs](https://github.com/FVilli/gsynchro/blob/main/docs/scenarios.md) for current capabilities, limits, and how each option relates to `gsynchro`.
+
 ### Scenario A: a development computer at home
 
 Leave the development computer on with the repository, Drive client or mount, `gsynchro`, and the separate agent runner available. You can discuss requirements from ChatGPT or another connected chatbot, save an approved task into the Drive folder, and let the computer carry out the implementation locally. Source code stays in the repository; `gsynchro` synchronizes the selected task and documentation files.
@@ -330,9 +344,11 @@ npx gsynchro
 
 Keep Drive for desktop running and signed in. Wait for it to finish uploading local changes before shutting down or disconnecting the computer.
 
-#### Linux
+#### Linux: rclone (recommended for Google Drive)
 
-Create an existing local mount point and mount the rclone remote there:
+Do not use the Google Drive entry offered by Ubuntu/GNOME Online Accounts as the destination for `gsynchro`. That integration is convenient in the file manager, but its GVfs filesystem can expose opaque Google file IDs rather than the human-readable file and directory names to command-line programs. It is therefore not a reliable normal filesystem for this tool.
+
+Use [rclone](https://rclone.org/) instead. It authenticates with Google Drive and exposes a regular FUSE mount where the names and folder layout are usable by `gsynchro`. First configure a Google Drive remote named `gdrive` with `rclone config`, then create an existing local mount point and mount it:
 
 ```bash
 mkdir -p "$HOME/GDrive"
@@ -360,7 +376,7 @@ cd ~/work/my-project
 npx gsynchro
 ```
 
-The required FUSE support and permissions depend on the Linux distribution and mount configuration. Consult the [rclone mount documentation](https://rclone.org/commands/rclone_mount/) if the mount command fails.
+`--vfs-cache-mode writes` buffers writes locally and supports normal filesystem write operations; rclone retries failed uploads. The required FUSE support and permissions depend on the distribution and mount configuration. For the complete Ubuntu setup — rclone installation, Google OAuth configuration, verification, write test, and persistent user-level systemd service — see [the Linux rclone guide](https://github.com/FVilli/gsynchro/blob/main/docs/linux-rclone.md). Consult the [rclone mount documentation](https://rclone.org/commands/rclone_mount/) for mount options and troubleshooting.
 
 #### macOS: Google Drive for desktop
 
@@ -496,7 +512,9 @@ The project directory wins simultaneous changes. Check `.gsynchro/gsynchro.statu
 
 ## Development
 
-Clone the repository, then install dependencies and build:
+Source code and issues are on [GitHub](https://github.com/FVilli/gsynchro); see [CONTRIBUTING.md](https://github.com/FVilli/gsynchro/blob/main/CONTRIBUTING.md) for the contribution workflow. Before opening a pull request, fork the repository, create a focused branch, and keep the README and Linux guide current when a user-facing behavior changes.
+
+Clone the repository, then install dependencies and validate the change:
 
 ```bash
 npm install
@@ -505,12 +523,19 @@ npm run build
 npm pack --dry-run
 ```
 
-The published package includes the compiled CLI, this README, and the license. To publish a release, update the version in `package.json`, build the package, and publish it from an npm account with access:
+The published package includes only the compiled CLI, this README, the license, and the diagram; inspect the exact tarball before every release:
 
 ```bash
-npm run build
+npm pack --dry-run
+```
+
+To publish a release, select the next unused semantic version with `npm version patch`, `npm version minor`, or `npm version major`, review the generated commit and tag, then publish from an npm account with access:
+
+```bash
 npm publish
 ```
+
+`prepublishOnly` runs the typecheck and build immediately before publishing. Enable npm two-factor authentication for publishing; consider npm trusted publishing with OpenID Connect when releases are automated.
 
 ## License
 
