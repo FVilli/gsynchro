@@ -1,6 +1,6 @@
 {
   "name": "gsynchro",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "description": "Bidirectional sync of selected project files with a locally mounted folder",
   "keywords": [
     "sync",
@@ -13,13 +13,13 @@
   ],
   "license": "MIT",
   "author": "Federico Villi",
-  "homepage": "https://github.com/FVilli/gsynchro#readme",
+  "homepage": "https://github.com/fvilli/gsynchro#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/FVilli/gsynchro.git"
+    "url": "git+https://github.com/fvilli/gsynchro.git"
   },
   "bugs": {
-    "url": "https://github.com/FVilli/gsynchro/issues"
+    "url": "https://github.com/fvilli/gsynchro/issues"
   },
   "type": "module",
   "bin": {
