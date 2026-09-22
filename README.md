@@ -224,6 +224,7 @@ The chatbot produces the task content; saving it as a `.md` file in the Drive in
 - Moves propagated deletions to a local `.trash/` directory where possible.
 - Restricts synchronization to configurable file extensions (default: `.md`, `.txt`, `.png`, `.jpg`, `.jpeg`, `.svg`, `.pdf`) up to 10 MiB.
 - Supports glob patterns relative to the project root.
+- Writes a generated `GSYNCHRO.md` notice in the destination root so Drive-side collaborators and AI workspaces can see the configured sync scope.
 
 ## Requirements
 
@@ -312,6 +313,12 @@ items:
 | `debounce` | No | Quiet period in seconds before a reconciliation. Defaults to `3`; `0` runs without an additional delay. |
 
 Patterns in `items` are evaluated against both roots, and a file must also have one of the extensions in `extensions` to be eligible. This split is deliberate: once `extensions` says what kinds of files are in scope, `items` can use broader patterns like `docs/**/*.*` instead of repeating the extension in every pattern. For example, `docs/**/*.md` selects Markdown files below `docs/` on both sides, while `docs/**/*.*` selects every file below `docs/` whose extension is currently listed in `extensions`. Files still need to pass the fixed safety rules described below.
+
+### Drive-side synchronization notice
+
+After a configuration is saved and whenever `gsynchro` starts, it writes `GSYNCHRO.md` into the root of `destination`. This generated notice lists the configured extensions and path patterns, explains that a file must match both to be synchronized, and tells Drive-side collaborators how to request a change to the scope. It is intended for people and AI workspaces that work from the Drive folder without access to the local repository.
+
+`GSYNCHRO.md` is one-way metadata: it is generated from the repository configuration, never copied back into the repository, and does not prove that a watcher is currently running. Do not edit it; changes are replaced at the next run. The name is reserved in the destination root. If a non-generated file with that name already exists, `gsynchro` stops and asks you to rename or move it rather than overwriting it.
 
 ### Platform setup examples
 
@@ -484,6 +491,7 @@ The following rules are always applied, regardless of the configured `items` pat
 - Only files whose extension is listed in `extensions` are eligible (default: `.md`, `.txt`, `.png`, `.jpg`, `.jpeg`, `.svg`, `.pdf`); matching is case-insensitive. Unlike the other rules below, this one is configurable — see [Configuration fields](#configuration-fields).
 - Files larger than 10 MiB are skipped.
 - `.git/`, `node_modules/`, `.gsynchro/`, and `.trash/` directories are excluded.
+- The generated destination-root `GSYNCHRO.md` notice is excluded from ordinary synchronization.
 - Symbolic links are not followed or synchronized.
 - The project root and destination cannot be the same directory or contain one another.
 - Both roots are validated before missing files can be interpreted as deletions.
