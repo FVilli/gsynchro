@@ -26,7 +26,7 @@ The preferred workflow keeps high-level product and architecture discussions out
 
 Once a design decision is ready to implement, turn it into an explicit task file. `gsynchro` can synchronize that task and the selected governance documents into the local repository. The coding agent then reads the task and governance, opens the code and relevant configuration, and implements the approved change. This separates **deciding what to build and why** from **deciding how to change the code**.
 
-In this model, `gsynchro` moves the governed project context and task handoffs between Drive and the repository. It does not synchronize source code. By default it allows `.md`, `.txt`, `.json`, `.png`, `.jpg`, `.jpeg`, `.svg`, and `.pdf` — documentation, task files, and the mockups or diagrams referenced from them; the `extensions` setting can narrow or extend that list per project, and `items` selects which paths of those eligible files should travel.
+In this model, `gsynchro` moves the governed project context and task handoffs between Drive and the repository. It does not synchronize source code. By default it allows `.md`, `.txt`, `.png`, `.jpg`, `.jpeg`, `.svg`, and `.pdf` — documentation, task files, and the mockups or diagrams referenced from them; the `extensions` setting can narrow or extend that list per project, and `items` selects which paths of those eligible files should travel.
 
 ## Agentic development scenarios
 
@@ -217,12 +217,12 @@ The chatbot produces the task content; saving it as a `.md` file in the Drive in
 
 ## Features
 
-- Watches the project and destination directories and reconciles selected files after a configurable quiet period.
+- Watches only the directories that can contain configured items, then reconciles selected files after a configurable quiet period.
 - Copies new and changed files in either direction.
 - Propagates deletions using a saved synchronization state.
 - Resolves simultaneous changes in favor of the project directory.
 - Moves propagated deletions to a local `.trash/` directory where possible.
-- Restricts synchronization to configurable file extensions (default: `.md`, `.txt`, `.json`, `.png`, `.jpg`, `.jpeg`, `.svg`, `.pdf`) up to 10 MiB.
+- Restricts synchronization to configurable file extensions (default: `.md`, `.txt`, `.png`, `.jpg`, `.jpeg`, `.svg`, `.pdf`) up to 10 MiB.
 - Supports glob patterns relative to the project root.
 
 ## Requirements
@@ -287,7 +287,6 @@ debounce: 5
 extensions:
   - ".md"
   - ".txt"
-  - ".json"
   - ".png"
   - ".jpg"
   - ".jpeg"
@@ -309,7 +308,7 @@ items:
 | --- | --- | --- |
 | `destination` | Yes | Path to the existing destination directory. Relative paths are resolved from the process working directory; an absolute path is recommended. |
 | `items` | Yes | A non-empty list of glob patterns, relative to the project root, that selects files for synchronization. `*.*` selects eligible files in the project root only. On first setup, the wizard adds that pattern plus only existing directories named `adr`, `decisions`, `docs`, `mockups`, `prompts`, `tasks`, `stack`, `documents`, `documentation`, `milestones`, `governance`, `ai`, `agents`, or `architecture`, each recursively. |
-| `extensions` | No | A non-empty list of file extensions eligible for synchronization, each written with its leading dot (`.md`, not `md`); matching is case-insensitive. Defaults to `.md`, `.txt`, `.json`, `.png`, `.jpg`, `.jpeg`, `.svg`, `.pdf`. Narrow it (e.g. to just `.md`) or extend it (e.g. add `.docx`, `.csv`) to fit what the project's governance actually needs. |
+| `extensions` | No | A non-empty list of file extensions eligible for synchronization, each written with its leading dot (`.md`, not `md`); matching is case-insensitive. Defaults to `.md`, `.txt`, `.png`, `.jpg`, `.jpeg`, `.svg`, `.pdf`. Narrow it (e.g. to just `.md`) or extend it (e.g. add `.docx`, `.csv`, `.json`) to fit what the project's governance actually needs. |
 | `debounce` | No | Quiet period in seconds before a reconciliation. Defaults to `3`; `0` runs without an additional delay. |
 
 Patterns in `items` are evaluated against both roots, and a file must also have one of the extensions in `extensions` to be eligible. This split is deliberate: once `extensions` says what kinds of files are in scope, `items` can use broader patterns like `docs/**/*.*` instead of repeating the extension in every pattern. For example, `docs/**/*.md` selects Markdown files below `docs/` on both sides, while `docs/**/*.*` selects every file below `docs/` whose extension is currently listed in `extensions`. Files still need to pass the fixed safety rules described below.
@@ -482,7 +481,7 @@ When a deletion is propagated, `gsynchro` attempts to move the affected file int
 
 The following rules are always applied, regardless of the configured `items` patterns:
 
-- Only files whose extension is listed in `extensions` are eligible (default: `.md`, `.txt`, `.json`, `.png`, `.jpg`, `.jpeg`, `.svg`, `.pdf`); matching is case-insensitive. Unlike the other rules below, this one is configurable — see [Configuration fields](#configuration-fields).
+- Only files whose extension is listed in `extensions` are eligible (default: `.md`, `.txt`, `.png`, `.jpg`, `.jpeg`, `.svg`, `.pdf`); matching is case-insensitive. Unlike the other rules below, this one is configurable — see [Configuration fields](#configuration-fields).
 - Files larger than 10 MiB are skipped.
 - `.git/`, `node_modules/`, `.gsynchro/`, and `.trash/` directories are excluded.
 - Symbolic links are not followed or synchronized.
@@ -511,11 +510,23 @@ Start or repair the filesystem mount and confirm that the configured directory e
 
 ### A file is not synchronized
 
-Check that its path matches an `items` pattern, its extension is listed in the configured `extensions` (default: `.md`, `.txt`, `.json`, `.png`, `.jpg`, `.jpeg`, `.svg`, `.pdf`), it is no larger than 10 MiB, and it is not inside an excluded directory. Run with `--debug` to inspect watcher and filter output.
+Check that its path matches an `items` pattern, its extension is listed in the configured `extensions` (default: `.md`, `.txt`, `.png`, `.jpg`, `.jpeg`, `.svg`, `.pdf`), it is no larger than 10 MiB, and it is not inside an excluded directory. Run with `--debug` to inspect watcher and filter output.
 
 ### Remote changes appear late
 
 The destination watcher polls the mounted filesystem, but remote visibility depends on the mount client's cache and refresh behavior. Check the rclone mount and its cache configuration.
+
+### Linux reports `ENOSPC: System limit for number of file watchers reached`
+
+This is an inotify watcher limit, not a disk-space error. `gsynchro` watches only directories that can match `items`; update to a version with that behavior if an older release is watching unrelated trees such as generated data, `volumes/`, or build output. Keep `items` focused: a pattern containing `**` from the repository root intentionally watches the whole repository.
+
+If the selected directories are genuinely very large, or other programs already consume the limit, inspect the current limit with `sysctl fs.inotify.max_user_watches`. A Linux administrator can raise it temporarily with, for example:
+
+```bash
+sudo sysctl fs.inotify.max_user_watches=524288
+```
+
+Make a persistent change only after confirming the required value and your distribution's recommended `sysctl.d` configuration.
 
 ### A conflict was resolved unexpectedly
 

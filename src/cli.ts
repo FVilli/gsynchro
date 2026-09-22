@@ -144,7 +144,6 @@ const PREVIEW_WARN_TOTAL_BYTES = 2 * 1024 * 1024;
 const DEFAULT_EXTENSIONS = [
   '.md',
   '.txt',
-  '.json',
   '.png',
   '.jpg',
   '.jpeg',
@@ -353,6 +352,76 @@ function isAllowedRelativePath(
     .toLowerCase();
 
   return extensions.has(extension);
+}
+
+function hasGlobMagic(segment: string): boolean {
+  return /[*?[\]{}]/.test(segment);
+}
+
+/*
+ * Chokidar needs to walk a directory before it can apply a file-level
+ * filter. Do not let a root pattern such as `*.*` turn that into a recursive
+ * watch of an entire checkout: it is deliberately root-only. This conservative
+ * check keeps only directories which can still lead to at least one configured
+ * item. A `**` remains intentionally recursive.
+ */
+function directoryMayContainConfiguredItem(
+  relativePath: string,
+  items: readonly string[],
+): boolean {
+  const directory = normalizeRelative(relativePath);
+
+  if (!directory) {
+    return true;
+  }
+
+  const directorySegments = directory.split('/');
+
+  return items.some((item) => {
+    const patternSegments = normalizeRelative(item).split('/');
+    const firstDynamicSegment = patternSegments.findIndex(hasGlobMagic);
+
+    /* A literal filename does not make its own name a directory. */
+    const staticSegments = firstDynamicSegment === -1
+      ? patternSegments.slice(0, -1)
+      : patternSegments.slice(0, firstDynamicSegment);
+
+    const sharedLength = Math.min(
+      directorySegments.length,
+      staticSegments.length,
+    );
+
+    for (let index = 0; index < sharedLength; index += 1) {
+      if (directorySegments[index] !== staticSegments[index]) {
+        return false;
+      }
+    }
+
+    /* We still need to walk through parents on the way to a static prefix. */
+    if (directorySegments.length <= staticSegments.length) {
+      return true;
+    }
+
+    const remainingPatternSegments = patternSegments.slice(
+      staticSegments.length,
+    );
+
+    if (remainingPatternSegments.includes('**')) {
+      return true;
+    }
+
+    /*
+     * For a non-recursive glob with one child directory, allow only the
+     * directory levels that the pattern itself names before the filename.
+     */
+    const directoryLevelsAfterStaticPrefix = Math.max(
+      0,
+      remainingPatternSegments.length - 1,
+    );
+
+    return directorySegments.length <=
+      staticSegments.length + directoryLevelsAfterStaticPrefix;
+  });
 }
 
 function snapshotsEqual(
@@ -1776,12 +1845,18 @@ function createWatcher(
       },
 
       // Chokidar 5 accepts paths, not globs. fast-glob applies config.items
-      // during reconciliation; prune excluded directories here.
+      // during reconciliation; prune excluded and irrelevant directories here.
       ignored: (filePath, info) => {
         const relativePath = path.relative(root, path.resolve(root, filePath));
-        const ignored = normalizeRelative(relativePath).split('/').some(
+        const normalizedPath = normalizeRelative(relativePath);
+        const hasExcludedSegment = normalizedPath.split('/').some(
           (segment) => EXCLUDED_DIRECTORIES.has(segment),
-        ) || (info?.isFile() === true && !isAllowedRelativePath(relativePath, extensionSet));
+        );
+        const ignored = hasExcludedSegment ||
+          (info?.isDirectory() === true &&
+            !directoryMayContainConfiguredItem(normalizedPath, config.items)) ||
+          (info?.isFile() === true &&
+            !isAllowedRelativePath(relativePath, extensionSet));
         if (ignored) {
           debug(`FILTER ${side.toUpperCase()} ignored: ${relativePath}`);
         }
