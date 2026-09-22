@@ -1,124 +1,106 @@
-# rclone per gsynchro
+# rclone for gsynchro
 
-`gsynchro` usa Google Drive come normale filesystem locale.
+`gsynchro` uses Google Drive as an ordinary local filesystem.
 
-Google Drive viene montato tramite `rclone` in:
+This guide mounts Google Drive with `rclone` at:
 
 ```text
 ~/GDrive
 ```
 
-Lo script `gsynchro` non usa direttamente API Google Drive.
+`gsynchro` does not call the Google Drive API directly.
+
+This guide is for Ubuntu and other Linux distributions with FUSE 3 support. Do not use the Google Drive filesystem exposed by GNOME Online Accounts as the `gsynchro` destination: command-line applications can see opaque Google IDs instead of the normal file and directory names. Use the rclone mount described below as the single local representation of Drive.
 
 ---
 
-# 1. Installazione
+## 1. Install rclone
 
-Su Ubuntu:
+On Ubuntu:
 
 ```bash
 sudo -v
+sudo apt install fuse3
 curl https://rclone.org/install.sh | sudo bash
 ```
 
-Verifica:
+Verify the installation:
 
 ```bash
 rclone version
 ```
 
+The installer command is published by rclone. For a manual installation or another distribution, use the [official installation guide](https://rclone.org/install/). Avoid the Snap package for this use case: rclone documents that its strict confinement does not support `rclone mount`.
+
 ---
 
-# 2. Configurazione Google Drive
+## 2. Configure Google Drive
 
-Avvia:
+Start the interactive configuration:
 
 ```bash
 rclone config
 ```
 
-Crea un nuovo remote:
+Create a new remote:
 
 ```text
 n) New remote
 ```
 
-Nome consigliato:
+Recommended name:
 
 ```text
 gdrive
 ```
 
-Tipo:
+Storage type:
 
 ```text
 Google Drive
 ```
 
-Per Google OAuth è consigliato utilizzare un proprio:
+Create and use your own Google OAuth `client_id` and `client_secret` in Google Cloud Console. rclone documents that its shared Google Drive client ID is being retired during 2026, so leaving these values blank can interrupt an existing mount. Follow rclone's [own client ID guide](https://rclone.org/drive/#making-your-own-client-id).
 
-```text
-client_id
-client_secret
-```
-
-creato nella Google Cloud Console.
-
-Scope:
+Select **Full access all files, excluding Application Data Folder**. It is required because `gsynchro` needs to read, create, update, rename, and move selected files:
 
 ```text
 1 / Full access all files
 ```
 
-Service account:
+For an ordinary personal Drive, leave the service-account option empty, select `No` for advanced configuration, and select `Yes` for browser-based authentication. The temporary local OAuth callback uses `127.0.0.1`; allow it through a host firewall if the browser cannot complete sign-in.
 
-```text
-lasciare vuoto
-```
-
-Advanced config:
-
-```text
-No
-```
-
-Autenticazione tramite browser:
-
-```text
-Yes
-```
-
-Per un normale "Il mio Drive":
+For a normal My Drive account, select:
 
 ```text
 Shared Drive: No
 ```
 
-Al termine salvare il remote.
+Save the remote when the configuration is complete.
 
 ---
 
-# 3. Verifica del remote
+## 3. Verify the remote
 
-Elenco directory:
+List directories:
 
 ```bash
 rclone lsd gdrive:
 ```
 
-Elenco file e directory:
+List files and directories:
 
 ```bash
 rclone lsf gdrive:
 ```
 
-Informazioni quota:
+Show quota information:
 
 ```bash
 rclone about gdrive:
 ```
 
-Esempio:
+For example:
 
 ```bash
 rclone lsd gdrive:develop
@@ -126,63 +108,68 @@ rclone lsd gdrive:develop
 
 ---
 
-# 4. Mount locale
+## 4. Create a local mount
 
-Creare il mount point:
+Create the mount point:
 
 ```bash
 mkdir -p ~/GDrive
 ```
 
-Avvio manuale:
+Start the mount manually:
 
 ```bash
 rclone mount gdrive: ~/GDrive --vfs-cache-mode writes
 ```
 
-Il comando resta in foreground.
-
-In un altro terminale:
+This command remains in the foreground. In another terminal, check the mount:
 
 ```bash
 ls ~/GDrive
 ```
 
-I file e le cartelle di Google Drive devono apparire con nomi normali.
+Google Drive files and directories should appear with their normal names. `--vfs-cache-mode writes` is important: rclone buffers writes locally, supports normal filesystem write operations, and retries failed uploads.
 
 ---
 
-# 5. Test di scrittura
+## 5. Test writing
 
-Esempio:
+For example:
 
 ```bash
-mkdir -p ~/GDrive/develop/rclone-test
+mkdir -p ~/GDrive/projects/gsynchro-rclone-test
 
-echo "test" > ~/GDrive/develop/rclone-test/test.md
+echo "test" > ~/GDrive/projects/gsynchro-rclone-test/test.md
 
-cat ~/GDrive/develop/rclone-test/test.md
+cat ~/GDrive/projects/gsynchro-rclone-test/test.md
 
 mv \
-  ~/GDrive/develop/rclone-test/test.md \
-  ~/GDrive/develop/rclone-test/test2.md
+  ~/GDrive/projects/gsynchro-rclone-test/test.md \
+  ~/GDrive/projects/gsynchro-rclone-test/test2.md
 
-rm ~/GDrive/develop/rclone-test/test2.md
+rm ~/GDrive/projects/gsynchro-rclone-test/test2.md
+rmdir ~/GDrive/projects/gsynchro-rclone-test
 ```
 
-Verificare anche dal browser Google Drive.
+Also verify the changes in the Google Drive web interface.
 
 ---
 
-# 6. Mount automatico con systemd
+## 6. Start the mount automatically with systemd
 
-Creare:
+Create this file:
 
 ```text
 ~/.config/systemd/user/rclone-gdrive.service
 ```
 
-Contenuto:
+Create its parent directory first:
+
+```bash
+mkdir -p ~/.config/systemd/user
+```
+
+Contents:
 
 ```ini
 [Unit]
@@ -191,8 +178,10 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=simple
+Type=notify
 ExecStart=/usr/bin/rclone mount gdrive: %h/GDrive \
+  --config %h/.config/rclone/rclone.conf \
+  --cache-dir %h/.cache/rclone \
   --vfs-cache-mode writes \
   --dir-cache-time 12h \
   --poll-interval 1m \
@@ -207,37 +196,45 @@ RestartSec=5
 WantedBy=default.target
 ```
 
-Ricaricare systemd:
+`Type=notify` makes systemd consider the service started only after rclone has mounted the directory. The explicit configuration and cache paths avoid ambiguity in a service environment. Keep enough free disk space for the VFS write cache; rclone writes data back after files are closed and have been idle for its write-back interval.
+
+Reload the user service manager:
 
 ```bash
 systemctl --user daemon-reload
 ```
 
-Abilitare e avviare:
+Enable and start the service:
 
 ```bash
 systemctl --user enable --now rclone-gdrive.service
 ```
 
-Verificare:
+To keep this user service running after a reboot even before you log in, enable lingering once:
+
+```bash
+loginctl enable-linger "$USER"
+```
+
+Check its status:
 
 ```bash
 systemctl --user status rclone-gdrive.service
 ```
 
-Verificare il mount:
+Check the mount:
 
 ```bash
 mount | grep GDrive
 ```
 
-Log realtime:
+Follow the logs:
 
 ```bash
 journalctl --user -u rclone-gdrive.service -f
 ```
 
-Riavvio manuale:
+Restart manually:
 
 ```bash
 systemctl --user restart rclone-gdrive.service
@@ -257,30 +254,30 @@ systemctl --user start rclone-gdrive.service
 
 ---
 
-# 7. Smontaggio manuale
+## 7. Unmount manually
 
-Se il mount è stato avviato manualmente:
+If the mount was started manually:
 
 ```bash
 fusermount3 -u ~/GDrive
 ```
 
-Oppure interrompere il processo `rclone mount` con:
+Alternatively, stop the `rclone mount` process with:
 
 ```text
 Ctrl+C
 ```
 
-Non avviare contemporaneamente il mount manuale e quello systemd sullo stesso `~/GDrive`.
+Do not run the manual mount and the systemd service at the same time for `~/GDrive`.
 
 ---
 
-# 8. Configurazione gsynchro
+## 8. Configure gsynchro
 
-Esempio `.gsynchro/gsynchro.yml`:
+Example `.gsynchro/gsynchro.yml`:
 
 ```yaml
-destination: /home/federico/GDrive/develop/AEP
+destination: /home/alex/GDrive/projects/my-project
 
 debounce: 5
 
@@ -292,7 +289,7 @@ items:
   - "usecases/**/*.md"
 ```
 
-Il mount rclone deve essere disponibile prima di avviare:
+The rclone mount must be available before starting:
 
 ```bash
 npm run gsynchro
@@ -300,11 +297,11 @@ npm run gsynchro
 
 ---
 
-# 9. GNOME Online Accounts
+## 9. GNOME Online Accounts
 
-Se Google Drive è già configurato tramite GNOME Online Accounts, l'integrazione Files può essere disabilitata per evitare un doppio accesso allo stesso Drive.
+If Google Drive is already configured through GNOME Online Accounts, do not use its **Files** integration as the `gsynchro` destination. It can be disabled to avoid a second, misleading view of the same Drive; rclone remains the mount used by `gsynchro`.
 
-Percorso indicativo:
+Typical path:
 
 ```text
 Settings
@@ -313,57 +310,61 @@ Settings
 → Files: OFF
 ```
 
-È possibile lasciare attivi gli altri servizi Google.
+Other Google services can remain enabled.
 
 ---
 
-# 10. Comandi rclone utili
+## 10. Useful rclone commands
 
-Elencare directory:
+List directories:
 
 ```bash
 rclone lsd gdrive:
 ```
 
-Elencare contenuti:
+List contents:
 
 ```bash
 rclone lsf gdrive:
 ```
 
-Copiare senza cancellare dalla destinazione:
+Copy without deleting files from the destination:
 
 ```bash
-rclone copy sorgente gdrive:destinazione
+rclone copy source gdrive:destination
 ```
 
-Sincronizzare rendendo la destinazione uguale alla sorgente:
+Synchronize the destination to match the source:
 
 ```bash
-rclone sync sorgente gdrive:destinazione
+rclone sync source gdrive:destination
 ```
 
-ATTENZIONE: `sync` può cancellare file nella destinazione.
+> Warning: `sync` can delete files from the destination.
 
-Durante i test usare preferibilmente:
+Do not run `rclone copy` or `rclone sync` against the same project directory while `gsynchro` is running. They bypass `gsynchro`'s selected-file filters, synchronization state, conflict rule, and trash recovery.
+
+During testing, prefer:
 
 ```bash
-rclone sync --interactive sorgente gdrive:destinazione
+rclone sync --interactive source gdrive:destination
 ```
 
-Mostrare la configurazione:
+Show the configuration:
 
 ```bash
 rclone config show
 ```
 
-Mostrare i path usati da rclone:
+> Warning: this output can contain OAuth refresh tokens and client credentials. Do not paste it into an issue, chat, log, or public document.
+
+Show the paths used by rclone:
 
 ```bash
 rclone config paths
 ```
 
-Verificare il remote:
+Verify the remote:
 
 ```bash
 rclone about gdrive:
@@ -371,7 +372,7 @@ rclone about gdrive:
 
 ---
 
-# Architettura
+## Architecture
 
 ```text
 Google Drive
@@ -382,9 +383,9 @@ Google Drive
     ↕
  gsynchro
     ↕
-repository Git
+Git repository
 ```
 
-`rclone` si occupa esclusivamente del collegamento tra Google Drive e il filesystem locale.
+`rclone` is responsible only for connecting Google Drive to the local filesystem.
 
-`gsynchro` si occupa esclusivamente della sincronizzazione selettiva e bidirezionale tra il repository e la cartella montata in `~/GDrive`.
+`gsynchro` is responsible only for the selective, bidirectional synchronization between the repository and the folder mounted at `~/GDrive`.

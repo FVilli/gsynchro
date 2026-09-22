@@ -76,6 +76,10 @@ type SyncOperation =
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 const DEBUG = process.argv.slice(2).includes('--debug');
 const SETUP = process.argv.slice(2).includes('--setup');
+const STYLED_OUTPUT =
+  Boolean(process.stdout.isTTY) &&
+  !process.env.NO_COLOR &&
+  !process.argv.slice(2).includes('--no-color');
 const DEFAULT_ITEMS = ['*.md', 'docs/**/*.md'];
 const PREVIEW_SAMPLE_SIZE = 15;
 const PREVIEW_WARN_FILE_COUNT = 20;
@@ -124,6 +128,54 @@ let eventQueue: FsEvent[] = [];
 /* -------------------------------------------------------------------------- */
 /* Utilities                                                                  */
 /* -------------------------------------------------------------------------- */
+
+const ANSI = {
+  reset: '\x1b[0m',
+  bold: '\x1b[1m',
+  dim: '\x1b[2m',
+  red: '\x1b[31m',
+  green: '\x1b[32m',
+  yellow: '\x1b[33m',
+  blue: '\x1b[34m',
+  cyan: '\x1b[36m',
+} as const;
+
+type Tone = keyof Omit<typeof ANSI, 'reset'>;
+
+function paint(value: string, ...tones: Tone[]): string {
+  if (!STYLED_OUTPUT || tones.length === 0) {
+    return value;
+  }
+
+  return `${tones.map((tone) => ANSI[tone]).join('')}${value}${ANSI.reset}`;
+}
+
+function label(
+  emoji: string,
+  plain: string,
+  tone: Tone,
+): string {
+  return STYLED_OUTPUT
+    ? `${emoji} ${paint(plain, 'bold', tone)}`
+    : `[${plain.toLowerCase()}]`;
+}
+
+function sideLabel(side: Side): string {
+  const name = side === 'repo' ? 'repository' : 'destination';
+
+  return STYLED_OUTPUT
+    ? paint(name, 'bold', side === 'repo' ? 'blue' : 'cyan')
+    : name;
+}
+
+function printBanner(): void {
+  if (STYLED_OUTPUT) {
+    console.log(`\n${paint('🔁 gsynchro', 'bold', 'cyan')} ${paint('bidirectional file sync', 'dim')}`);
+    return;
+  }
+
+  console.log('[gsynchro]');
+}
 
 function debug(message: string, details?: unknown): void {
   if (DEBUG) {
@@ -954,7 +1006,7 @@ async function scanSide(
 
   for (const item of oversized) {
     console.warn(
-      `SKIP  ${side.toUpperCase()} ${item.relativePath} ` +
+      `${label('⏭️', 'Skipped', 'yellow')} ${sideLabel(side)} ${item.relativePath} ` +
       `(${(item.size / 1024 / 1024).toFixed(2)} MiB > 10 MiB)`,
     );
   }
@@ -1300,12 +1352,12 @@ async function executePlan(
         operation.reason.includes('conflict')
       ) {
         console.warn(
-          `CONFLICT ${operation.path} - repository wins`,
+          `${label('⚠️', 'Conflict', 'yellow')} ${operation.path} — repository wins`,
         );
       }
 
       console.log(
-        `SYNC  ${operation.from.padEnd(5)} -> ${operation.to.padEnd(5)} ` +
+        `${label('➡️', 'Sync', 'cyan')} ${sideLabel(operation.from)} → ${sideLabel(operation.to)} ` +
         `${operation.path} (${operation.reason})`,
       );
 
@@ -1319,7 +1371,7 @@ async function executePlan(
     }
 
     console.log(
-      `TRASH ${operation.side.padEnd(5)}    ${operation.path} ` +
+      `${label('🗑️', 'Trash', 'yellow')} ${sideLabel(operation.side)} ${operation.path} ` +
       `(${operation.reason})`,
     );
 
@@ -1396,14 +1448,14 @@ async function reconcile(): Promise<void> {
   try {
     console.log('');
     console.log(
-      `[gsynchro] reconcile ${new Date().toLocaleTimeString()}`,
+      `${label('🔄', 'Syncing', 'cyan')} ${paint(new Date().toLocaleTimeString(), 'dim')}`,
     );
 
     if (events.length > 0) {
       for (const event of events) {
         console.log(
-          `EVENT ${event.side.toUpperCase().padEnd(5)} ` +
-          `${event.type.padEnd(9)} ${event.path}`,
+          `  ${label('👀', 'Changed', 'blue')} ${sideLabel(event.side)} ` +
+          `${event.type} ${event.path}`,
         );
       }
     }
@@ -1437,7 +1489,7 @@ async function reconcile(): Promise<void> {
       );
 
       console.log(
-        '[gsynchro] already synchronized',
+        `${label('✅', 'Up to date', 'green')} repository and destination already match`,
       );
 
       return;
@@ -1474,13 +1526,13 @@ async function reconcile(): Promise<void> {
     );
 
     console.log(
-      `[gsynchro] sync completed (${plan.length} operation${
+      `${label('✅', 'Sync complete', 'green')} ${plan.length} operation${
         plan.length === 1 ? '' : 's'
-      })`,
+      } applied`,
     );
   } catch (error) {
     console.error(
-      '[gsynchro] reconciliation failed:',
+      `${label('❌', 'Sync failed', 'red')}:`,
       error instanceof Error
         ? error.message
         : error,
@@ -1652,7 +1704,7 @@ async function shutdown(
   signal: string,
 ): Promise<void> {
   console.log(
-    `\n[gsynchro] ${signal}, shutting down`,
+    `\n${label('👋', 'Stopping', 'yellow')} ${signal} received; closing watchers`,
   );
 
   if (debounceTimer) {
@@ -1693,13 +1745,13 @@ async function main(): Promise<void> {
 
   await validateRoots();
 
-  console.log('[gsynchro]');
-  console.log(`  repo:        ${REPO_ROOT}`);
-  console.log(`  drive:       ${DRIVE_ROOT}`);
-  console.log(`  debounce:    ${config.debounce}s`);
-  console.log(`  max size:    10 MiB`);
-  console.log(`  extensions:  ${config.extensions.join(' ')}`);
-  console.log(`  conflicts:   repository wins`);
+  printBanner();
+  console.log(`  ${paint('Repository', 'bold')}:  ${REPO_ROOT}`);
+  console.log(`  ${paint('Destination', 'bold')}: ${DRIVE_ROOT}`);
+  console.log(`  ${paint('Debounce', 'bold')}:    ${config.debounce}s`);
+  console.log(`  ${paint('Max file size', 'bold')}: 10 MiB`);
+  console.log(`  ${paint('Extensions', 'bold')}:  ${config.extensions.join(' ')}`);
+  console.log(`  ${paint('Conflicts', 'bold')}:   repository wins`);
   debug('Debug enabled; RAW events precede normalized EVENT and QUEUE logs');
 
   /*
@@ -1713,7 +1765,9 @@ async function main(): Promise<void> {
   driveWatcher =
     createWatcher('drive');
 
-  console.log('[gsynchro] watching both sides');
+  console.log(
+    `${label('👀', 'Watching', 'green')} repository and destination for changes`,
+  );
 
   process.on('SIGINT', () => {
     void shutdown('SIGINT');
@@ -1726,7 +1780,7 @@ async function main(): Promise<void> {
 
 void main().catch((error) => {
   console.error(
-    '[gsynchro] fatal:',
+    `${label('❌', 'Fatal', 'red')}:`,
     error instanceof Error
       ? error.message
       : error,

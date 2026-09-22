@@ -431,6 +431,8 @@ Enable detailed watcher and reconciliation logs with:
 npx gsynchro --debug
 ```
 
+When run in an interactive terminal, `gsynchro` uses color and compact status icons to make synchronization activity easier to scan. Set the standard `NO_COLOR` environment variable, or pass `--no-color`, for plain output; output is also plain when redirected to a file or another process.
+
 Debug output includes timestamps and filesystem events, filter decisions, debounce activity, and the reconciliation plan. The watcher uses polling for the destination directory to improve change detection on mounted filesystems. Remote changes become visible according to the mount client's cache behavior; `gsynchro` cannot detect a remote change before the mounted filesystem reports it.
 
 ## Synchronization behavior
